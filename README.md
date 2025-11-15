@@ -27,4 +27,4 @@
 pip install -r requirements.txt
 
 # تشغيل البوت
-python bot.py
+python app.py
