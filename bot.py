@@ -2,7 +2,9 @@ import requests
 import json
 import threading
 import random
+import time
 from functools import lru_cache
+from collections import defaultdict
 
 # إعدادات التطبيق
 BOT_TOKEN = "7840468800:AAFZNDp0PiUcm-POl-XMJLyjc8oOcsQcgd8"
@@ -23,6 +25,10 @@ user_conversations = {}
 current_access_token = None
 running = True
 processed_message_ids = set()
+# تخزين آخر وقت معالجة لكل مستخدم
+user_last_activity = defaultdict(float)
+# تخزين آخر رسالة معالجة لكل مستخدم
+user_last_message = defaultdict(str)
 
 # تجهيز الجلسة مع تحسينات الأداء
 session = requests.Session()
@@ -57,6 +63,21 @@ STICKER_RESPONSES = [
     "شكراً على الملصق! 🤗"
 ]
 
+def is_duplicate_message(sender_id, message_content):
+    """فحص إذا كانت الرسالة مكررة لنفس المستخدم"""
+    current_time = time.time()
+    message_text = message_content.get('text', '') if isinstance(message_content, dict) else str(message_content)
+    
+    # إذا كانت نفس الرسالة ومر أقل من 5 ثواني منذ آخر نشاط
+    if (user_last_message[sender_id] == message_text and 
+        current_time - user_last_activity[sender_id] < 5):
+        return True
+    
+    # تحديث آخر نشاط ورسالة
+    user_last_activity[sender_id] = current_time
+    user_last_message[sender_id] = message_text
+    return False
+
 def send_typing_indicator(recipient_id, typing_status=True):
     """إرسال مؤشر الكتابة للمستخدم"""
     action = "typing_on" if typing_status else "typing_off"
@@ -75,12 +96,6 @@ def send_typing_indicator(recipient_id, typing_status=True):
     except Exception as e:
         print(f"Typing indicator error: {e}")
         return False
-
-def wait_seconds(seconds):
-    """انتظار عدد من الثواني بدون استخدام time"""
-    for i in range(seconds * 1000):
-        # عملية حسابية بسيطة للانتظار
-        _ = i * i
 
 def get_random_response(responses_list):
     """إرجاع رد عشوائي من القائمة"""
@@ -119,7 +134,7 @@ def get_access_token(force_refresh=False):
                 return current_access_token
         except Exception as e:
             print(f"Attempt {attempt + 1} failed: {e}")
-            wait_seconds(2 ** attempt)
+            time.sleep(2 ** attempt)
     
     print("Failed to get access token")
     return None
@@ -127,7 +142,7 @@ def get_access_token(force_refresh=False):
 def token_refresh_scheduler():
     global running
     while running:
-        wait_seconds(900)  # انتظار 15 دقيقة
+        time.sleep(900)  # انتظار 15 دقيقة
         if running:
             print("Refreshing token...")
             get_access_token(force_refresh=True)
@@ -210,7 +225,7 @@ def transcribe_audio(audio_url):
                 return result['text']
             elif result['status'] == 'error':
                 return None
-            wait_seconds(1)
+            time.sleep(1)
     except Exception as e:
         print(f"Transcription error: {e}")
         return None
@@ -381,6 +396,11 @@ def send_facebook_audio(recipient_id, audio_bytes):
 def handle_message_thread(sender_id, message):
     """معالجة الرسالة في thread منفصل"""
     def process_message():
+        # فحص إذا كانت الرسالة مكررة
+        if is_duplicate_message(sender_id, message):
+            print(f"Ignoring duplicate message from {sender_id}")
+            return
+            
         # معالجة الملصقات
         if 'attachments' in message:
             attachments = message['attachments']['data']
@@ -588,10 +608,10 @@ def poll_facebook_messages():
                             handle_message_thread(sender_id, message_content)
                             processed_message_ids.add(msg_id)
                 
-                wait_seconds(1)  # انتظار ثانية بين الدورات
+                time.sleep(1)  # انتظار ثانية بين الدورات
         except Exception as e:
             print(f"Polling error: {e}")
-            wait_seconds(3)  # زيادة زمن الانتظار عند حدوث خطأ
+            time.sleep(3)  # زيادة زمن الانتظار عند حدوث خطأ
 
 def stop_bot():
     global running
