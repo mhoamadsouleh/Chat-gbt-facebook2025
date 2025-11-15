@@ -1,40 +1,339 @@
 import requests
 import json
-import threading
 import random
+import threading
+import time
 import os
-from functools import lru_cache
 
-# إعدادات التطبيق
-BOT_TOKEN = "7840468800:AAFZNDp0PiUcm-POl-XMJLyjc8oOcsQcgd8"
-FACEBOOK_PAGE_ACCESS_TOKEN = 'EAARRlvmJ1MMBP8tnkpw0CgjZAgfGq9H2ekxQl8yClhzcMHNNWvgdwlBL3zNZAg8bzs3NBmQ9VDNronmCAQwG3zApXM7u0WtEzIgigyBkRUgg3MCQKL8oYyqKmPf5Ff1Rq23Qc5njfpc2X2hIhZC2ZCLawvlxeaJVBfeKe2y0H9jjMxZAj89ZCpL8H2ebE1MzRwkMhz5qAaowZDZD'
+# إعدادات الفيسبوك
+FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get('FACEBOOK_TOKEN', 'EAARRlvmJ1MMBP8tnkpw0CgjZAgfGq9H2ekxQl8yClhzcMHNNWvgdwlBL3zNZAg8bzs3NBmQ9VDNronmCAQwG3zApXM7u0WtEzIgigyBkRUgg3MCQKL8oYyqKmPf5Ff1Rq23Qc5njfpc2X2hIhZC2ZCLawvlxeaJVBfeKe2y0H9jjMxZAj89ZCpL8H2ebE1MzRwkMhz5qAaowZDZD')
 FACEBOOK_GRAPH_API_URL = 'https://graph.facebook.com/v11.0/me/messages'
 
-# إعدادات APIs
-CHAT_API_URL = "https://prod-smith.vulcanlabs.co/api/v7/chat_android"
-VISION_API_URL = "https://api.vulcanlabs.co/smith-v2/api/v7/vision_android"
+# إعدادات توليد الصور
 GETIMG_API_URL = "https://api.getimg.ai/v1/stable-diffusion-xl/text-to-image"
-GETIMG_API_KEY = "key-3XbWkFO34FVCQUnJQ6A3qr702Eu7DDR1dqoJOyhMHqhruEhs22KUzR7w631ZFiA5OFZIba7i44qDQEMpKxzegOUm83vCfILb"
-VISION_AUTH_TOKEN = "FOcsaJJf1A+Zh3Ku6EfaNYbo844Y7168Ak2lSmaxtNZVtD7vcaJUmTCayc1HgcXIILvdmnzsdPjuGwqYKKUFRLdUVQQZbfXHrBUSYrbHcMrmxXvDu/DHzrtkPqg90dX/rSmTRnx7sz7pHTOmZqLLfLUnaO2XTEZLD0deMpRdzQE="
-ASSEMBLYAI_API_KEY = "771de44ac7644510a0df7e9a3b8a6b7c"
-TTS_SERVICE_URL = "https://dev-yacingpt.pantheonsite.io/wp-admin/maint/Bot%20hosting/Textspeesh.php"
+GETIMG_API_KEY = os.environ.get('GETIMG_KEY', "key-3XbWkFO34FVCQUnJQ6A3qr702Eu7DDR1dqoJOyhMHqhruEhs22KUzR7w631ZFiA5OFZIba7i44qDQEMpKxzegOUm83vCfILb")
 
-# التخزين المحلي للمستخدمين
-user_conversations = {}
-current_access_token = None
-running = True
+# التخزين المحلي
+user_sessions = {}
 processed_message_ids = set()
 
-# تجهيز الجلسة مع تحسينات الأداء
-session = requests.Session()
-session.headers.update({
-    'Connection': 'keep-alive',
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-})
-adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100, max_retries=3)
-session.mount('https://', adapter)
-session.mount('http://', adapter)
+# ردود سريعة
+QUICK_RESPONSES = {
+    'hello': ['مرحبا! 😊', 'أهلاً وسهلاً! 🌟', 'مرحباً بك! 👋'],
+    'how are you': ['أنا بخير الحمدلله! 😄', 'بخير وشكراً! 🙏', 'الحمدلله دائماً! 🌺'],
+    'thanks': ['العفو! 😊', 'لا شكر على واجب! 🙏', 'أنت الأفضل! 🌟'],
+    'name': ['أنا مساعدك الذكي! 🤖', 'أنا بوت فيسبوك! 🚀', 'مساعدك الشخصي! 💫'],
+    'help': ['يمكنني مساعدتك في المحادثات والرد على استفساراتك! 💬', 'أنا هنا لأجيب على أسئلتك! ❓'],
+    'bye': ['مع السلامة! 👋', 'إلى اللقاء! 🌟', 'كانت محادثة جميلة! 💫'],
+    'صور': ['أحب إنشاء الصور! 🎨', 'يمكنني إنشاء صور رائعة لك! 🌟', 'أخبرني ماذا تريد أن أرسم! ✨'],
+    'ارسم': ['ماذا تريد أن أرسم؟ 🎨', 'أخبرني بالتفاصيل وسأرسمها لك! 🌟'],
+    'رسم': ['الرسم متعة! ما الذي تريد رسمه؟ 🖌️']
+}
 
+# كلمات توليد الصور
+IMAGE_KEYWORDS = ['اصنع لي صورة', 'ارسم لي', 'انشئ صورة', 'صور', 'رسم', 'ارسم', 'انشئ لي', 'اصنع صورة']
+
+# ردود الإيموجي
+EMOJI_RESPONSES = {
+    '😂': ['😂😂', 'ههههه ضحكتني!', 'والله مضحك!'],
+    '😍': ['😍😍', 'يا جميل!', 'الله على الجمال!'],
+    '❤️': ['❤️❤️', 'الله يسلمك!', 'يا قلبو!'],
+    '👍': ['👍👍', 'تم يا بطل!', 'الله يقويك!'],
+    '😢': ['لا تحزن 😢', 'الله يعين!', 'كل شيء سيكون بخير!'],
+    '🎉': ['🎉🎉', 'مبروك!', 'فرحانين من أجلك!'],
+    '🔥': ['🔥🔥', 'والله نار!', 'متميز!'],
+    '🤔': ['فكر معي 🤔', 'شاركنا رأيك!'],
+    '🙏': ['🙏🙏', 'الله يستجيب!', 'آمين!'],
+    '🎨': ['🎨🎨', 'الرسم متعة!', 'ماذا تريد أن أرسم؟']
+}
+
+def send_facebook_message(recipient_id, message_text):
+    """إرسال رسالة سريعة للفيسبوك"""
+    data = {
+        "recipient": {"id": recipient_id},
+        "message": {"text": message_text}
+    }
+    
+    try:
+        response = requests.post(
+            FACEBOOK_GRAPH_API_URL,
+            params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
+            json=data,
+            timeout=5
+        )
+        return response.status_code == 200
+    except:
+        return False
+
+def send_facebook_image(recipient_id, image_url):
+    """إرسال صورة للفيسبوك"""
+    try:
+        # تحميل الصورة
+        img_response = requests.get(image_url, timeout=10)
+        if img_response.status_code == 200:
+            image_data = img_response.content
+            
+            # إرسال الصورة
+            files = {
+                'recipient': (None, json.dumps({"id": recipient_id})),
+                'message': (None, json.dumps({"attachment": {"type": "image", "payload": {}}})),
+                'access_token': (None, FACEBOOK_PAGE_ACCESS_TOKEN),
+                'attachment': ('image.jpg', image_data, 'image/jpeg')
+            }
+            
+            response = requests.post(FACEBOOK_GRAPH_API_URL, files=files, timeout=10)
+            return response.status_code == 200
+    except Exception as e:
+        print(f"خطأ في إرسال الصورة: {e}")
+    return False
+
+def send_typing_indicator(recipient_id, typing_status=True):
+    """إرسال مؤشر الكتابة"""
+    action = "typing_on" if typing_status else "typing_off"
+    data = {
+        "recipient": {"id": recipient_id},
+        "sender_action": action
+    }
+    
+    try:
+        response = requests.post(
+            FACEBOOK_GRAPH_API_URL,
+            params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
+            json=data,
+            timeout=3
+        )
+        return response.status_code == 200
+    except:
+        return False
+
+def get_quick_response(message_text):
+    """البحث عن رد سريع"""
+    message_lower = message_text.lower().strip()
+    
+    # البحث في الردود السريعة
+    for key, responses in QUICK_RESPONSES.items():
+        if key in message_lower:
+            return random.choice(responses)
+    
+    # البحث في الإيموجي
+    for emoji, responses in EMOJI_RESPONSES.items():
+        if emoji in message_text:
+            return random.choice(responses)
+    
+    return None
+
+def generate_image(prompt):
+    """توليد صورة باستخدام الذكاء الاصطناعي"""
+    try:
+        headers = {
+            'Authorization': f'Bearer {GETIMG_API_KEY}',
+            'Content-Type': 'application/json',
+        }
+        
+        data = {
+            'model': 'stable-diffusion-xl',
+            'prompt': prompt + ", high quality, detailed, professional",
+            'negative_prompt': 'blurry, low quality, distorted, ugly',
+            'width': 1024,
+            'height': 1024,
+            'steps': 20  # تقليل الخطوات للسرعة
+        }
+        
+        response = requests.post(GETIMG_API_URL, headers=headers, json=data, timeout=30)
+        if response.status_code == 200:
+            result = response.json()
+            return result.get('url')
+        else:
+            print(f"خطأ في توليد الصورة: {response.status_code}")
+    except Exception as e:
+        print(f"خطأ في توليد الصورة: {e}")
+    
+    return None
+
+def generate_ai_response(message_text, user_id):
+    """إنشاء رد بالذكاء الاصطناعي (سريع)"""
+    # إذا كان الطلب متعلقاً بالصور
+    message_lower = message_text.lower()
+    for keyword in IMAGE_KEYWORDS:
+        if keyword in message_lower:
+            return "image_generation_request"
+    
+    # ردود ذكية سريعة
+    smart_responses = {
+        'كيف': ['أنا برنامج حاسوبي، لكني أحاول مساعدتك بأفضل شكل! 🤖', 'أعمل بشكل جيد وشكراً لسؤالك! 😊'],
+        'لماذا': ['هذا سؤال عميق! دعني أفكر... 🤔', 'هناك أسباب متعددة، أي جانب تقصد تحديداً؟ 💭'],
+        'متى': ['الوقت يتوقف على الظروف! ⏰', 'هذا يعتمد على عدة عوامل... 📅'],
+        'اين': ['الأماكن تتغير باستمرار! 🌍', 'هذا يعتمد على ما تبحث عنه تحديداً! 🗺️'],
+        'ماذا': ['هناك العديد من الاحتمالات! 💫', 'دعني أعرف المزيد لأجيب بدقة! ❓']
+    }
+    
+    for key, responses in smart_responses.items():
+        if key in message_lower:
+            return random.choice(responses)
+    
+    # رد افتراضي ذكي
+    default_responses = [
+        "أهلاً بك! هذا مثير للاهتمام! 🌟",
+        "شكراً لمشاركة هذا معي! 💫",
+        "أفهم ما تقصد! هل يمكنك توضيح المزيد؟ 🤔",
+        "هذا رائع! أخبرني المزيد! 🎉",
+        "أحب طريقة تفكيرك! 💭",
+        "هذا يجعلني أفكر... 🤔 ماذا تعتقد؟"
+    ]
+    return random.choice(default_responses)
+
+def handle_image_generation(sender_id, prompt):
+    """معالجة طلب توليد الصور"""
+    def generate_and_send():
+        send_typing_indicator(sender_id, True)
+        send_facebook_message(sender_id, "🔄 جاري إنشاء صورتك... هذا قد يستغرق بضع ثوانٍ ⏳")
+        
+        # توليد الصورة
+        image_url = generate_image(prompt)
+        
+        if image_url:
+            send_facebook_message(sender_id, "✅ تم إنشاء صورتك بنجاح! جاري الإرسال...")
+            
+            # إرسال الصورة
+            if send_facebook_image(sender_id, image_url):
+                send_facebook_message(sender_id, "🎨 هذه هي الصورة التي طلبتها! أتمنى أن تعجبك! 💫")
+            else:
+                send_facebook_message(sender_id, "⚠️ تم إنشاء الصورة ولكن هناك مشكلة في الإرسال. جرب مرة أخرى!")
+        else:
+            send_facebook_message(sender_id, "❌ عذراً، لم أتمكن من إنشاء الصورة. جرب مرة أخرى أو غيّر الوصف!")
+        
+        send_typing_indicator(sender_id, False)
+    
+    # تشغيل في thread منفصل لعدم تأخير الردود الأخرى
+    thread = threading.Thread(target=generate_and_send)
+    thread.daemon = True
+    thread.start()
+
+def extract_image_prompt(message_text):
+    """استخراج وصف الصورة من الرسالة"""
+    message_lower = message_text.lower()
+    
+    # إزالة الكلمات المفتاحية
+    for keyword in IMAGE_KEYWORDS:
+        message_lower = message_lower.replace(keyword, "")
+    
+    # تنظيف النص
+    prompt = message_lower.strip()
+    if not prompt or len(prompt) < 3:
+        return None
+    
+    return prompt
+
+def handle_message(sender_id, message):
+    """معالجة الرسالة بشكل سريع"""
+    # إرسال مؤشر الكتابة بسرعة
+    send_typing_indicator(sender_id, True)
+    
+    # الحصول على نص الرسالة
+    if 'text' not in message:
+        send_facebook_message(sender_id, "أهلاً! يمكنني فهم الرسائل النصية وتوليد الصور حالياً 😊")
+        send_typing_indicator(sender_id, False)
+        return
+    
+    message_text = message['text']
+    
+    # البحث عن رد سريع أولاً
+    quick_response = get_quick_response(message_text)
+    if quick_response:
+        send_facebook_message(sender_id, quick_response)
+        send_typing_indicator(sender_id, False)
+        return
+    
+    # التحقق من طلب توليد الصور
+    message_lower = message_text.lower()
+    is_image_request = any(keyword in message_lower for keyword in IMAGE_KEYWORDS)
+    
+    if is_image_request:
+        prompt = extract_image_prompt(message_text)
+        if prompt:
+            send_facebook_message(sender_id, f"🎨 فهمت أنك تريد صورة عن: '{prompt}'")
+            handle_image_generation(sender_id, prompt)
+        else:
+            send_facebook_message(sender_id, "❌ لم أستطع فهم ما تريد رسمه. رجاءً اشرح بالتفصيل! 💬")
+        send_typing_indicator(sender_id, False)
+        return
+    
+    # إذا كانت الرسالة عادية، استخدم الذكاء الاصطناعي السريع
+    ai_response = generate_ai_response(message_text, sender_id)
+    
+    if ai_response == "image_generation_request":
+        send_facebook_message(sender_id, "🎨 أرغب في إنشاء صورة لك! أخبرني ماذا تريد أن أرسم؟ 💫")
+    else:
+        send_facebook_message(sender_id, ai_response)
+    
+    send_typing_indicator(sender_id, False)
+
+def keep_alive():
+    """إبقاء البوت نشطاً على Render"""
+    while True:
+        print(f"🤖 البوت يعمل... {time.ctime()}")
+        time.sleep(300)  # طباعة كل 5 دقائق
+
+def poll_facebook_messages():
+    """سحب الرسائل من الفيسبوك"""
+    global processed_message_ids
+    
+    print("🚀 البوت يعمل الآن! ينتظر الرسائل...")
+    print("🎨 المميزات: ردود سريعة + توليد الصور + ذكاء اصطناعي")
+    
+    # بدء thread إبقاء البوت نشطاً
+    threading.Thread(target=keep_alive, daemon=True).start()
+    
+    while True:
+        try:
+            # الحصول على المحادثات الحديثة
+            url = f"https://graph.facebook.com/v11.0/me/conversations?fields=messages{{message,from,id}}&limit=10&access_token={FACEBOOK_PAGE_ACCESS_TOKEN}"
+            response = requests.get(url, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                for conversation in data.get('data', []):
+                    messages = conversation.get('messages', {}).get('data', [])
+                    
+                    for msg in messages:
+                        message_id = msg.get('id')
+                        sender_id = msg.get('from', {}).get('id')
+                        message_content = msg.get('message', '')
+                        
+                        if (message_id and message_id not in processed_message_ids and 
+                            sender_id and message_content):
+                            
+                            print(f"📩 رسالة جديدة من {sender_id}: {message_content}")
+                            
+                            # معالجة الرسالة
+                            message_data = {'text': message_content}
+                            handle_message(sender_id, message_data)
+                            
+                            processed_message_ids.add(message_id)
+                            
+                            # تنظيف الذاكرة إذا كبرت
+                            if len(processed_message_ids) > 1000:
+                                processed_message_ids = set()
+            
+            # انتظار قصير بين الدورات
+            time.sleep(2)
+            
+        except Exception as e:
+            print(f"❌ خطأ: {e}")
+            time.sleep(5)
+
+def start_bot():
+    """بدء تشغيل البوت"""
+    try:
+        poll_facebook_messages()
+    except KeyboardInterrupt:
+        print("⏹️ إيقاف البوت...")
+    except Exception as e:
+        print(f"💥 خطأ كبير: {e}")
+
+if __name__ == "__main__":
+    start_bot()
 # قائمة الإيموجي والملصقات التي يرد عليها
 EMOJI_RESPONSES = {
     '😂': ['😂😂', 'ههههه ضحكتني', 'والله مضحك'],
